@@ -651,6 +651,9 @@ func cpuinit() {
 //	call runtime·mstart
 //
 // The new G calls runtime·main.
+// Go进程启动顺序
+// 调用 osinit -> 获取系统CPU个数
+// 调用 schedinit ->
 func schedinit() {
 	lockInit(&sched.lock, lockRankSched)
 	lockInit(&sched.sysmonlock, lockRankSysmon)
@@ -679,6 +682,7 @@ func schedinit() {
 		_g_.racectx, raceprocctx0 = raceinit()
 	}
 
+	// 设置最大线程数量
 	sched.maxmcount = 10000
 
 	// The world starts stopped.
@@ -710,10 +714,12 @@ func schedinit() {
 
 	lock(&sched.lock)
 	sched.lastpoll = uint64(nanotime())
+	// 设定P的个数，优先以GOMAXPROCS变量，否则为系统的CPU数
 	procs := ncpu
 	if n, ok := atoi32(gogetenv("GOMAXPROCS")); ok && n > 0 {
 		procs = n
 	}
+	// 修改全局P队列元素数量
 	if procresize(procs) != nil {
 		throw("unknown runnable goroutine during bootstrap")
 	}
@@ -4983,6 +4989,7 @@ func (pp *p) destroy() {
 // code, so the GC must not be running if the number of Ps actually changes.
 //
 // Returns list of Ps with local work, they need to be scheduled by the caller.
+// 修改全局的P的数量
 func procresize(nprocs int32) *p {
 	assertLockHeld(&sched.lock)
 	assertWorldStopped()
