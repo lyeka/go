@@ -2042,8 +2042,10 @@ func execute(gp *g, inheritTime bool) {
 
 	// Assign gp.m before entering _Grunning so running Gs have an
 	// M.
+	// GM绑定
 	_g_.m.curg = gp
 	gp.m = _g_.m
+	// G状态改为运行中
 	casgstatus(gp, _Grunnable, _Grunning)
 	gp.waitsince = 0
 	gp.preempt = false
@@ -2067,6 +2069,7 @@ func execute(gp *g, inheritTime bool) {
 		traceGoStart()
 	}
 
+	// 正式执行G
 	gogo(&gp.sched)
 }
 
@@ -2778,6 +2781,7 @@ func goyield_m(gp *g) {
 }
 
 // Finishes execution of the current goroutine.
+// G执行完毕后，会调用此函数退出
 func goexit1() {
 	if raceenabled {
 		racegoend()
@@ -2792,6 +2796,7 @@ func goexit1() {
 func goexit0(gp *g) {
 	_g_ := getg()
 
+	// G清理工作
 	casgstatus(gp, _Grunning, _Gdead)
 	if isSystemGoroutine(gp, false) {
 		atomic.Xadd(&sched.ngsys, -1)
@@ -2819,6 +2824,7 @@ func goexit0(gp *g) {
 		gp.gcAssistBytes = 0
 	}
 
+	// GM解绑
 	dropg()
 
 	if GOARCH == "wasm" { // no threads yet on wasm
@@ -2830,6 +2836,8 @@ func goexit0(gp *g) {
 		print("invalid m->lockedInt = ", _g_.m.lockedInt, "\n")
 		throw("internal lockOSThread error")
 	}
+
+	// 将G放入gfree队列待复用
 	gfput(_g_.m.p.ptr(), gp)
 	if locked {
 		// The goroutine may have locked this thread because
@@ -2846,6 +2854,7 @@ func goexit0(gp *g) {
 			_g_.m.lockedExt = 0
 		}
 	}
+	// 循环调度
 	schedule()
 }
 
