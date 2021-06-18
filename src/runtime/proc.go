@@ -1701,7 +1701,9 @@ var newmHandoff struct {
 // May run with m.p==nil, so write barriers are not allowed.
 //go:nowritebarrierrec
 func newm(fn func(), _p_ *p) {
+	// 创建M
 	mp := allocm(_p_, fn)
+	// 设置P
 	mp.nextp.set(_p_)
 	mp.sigmask = initSigmask
 	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" {
@@ -2934,9 +2936,11 @@ func reentersyscall(pc, sp uintptr) {
 	_g_.throwsplit = true
 
 	// Leave SP around for GC and traceback.
+	// 保存G调度器上下文，用于下次被调度时恢复现场
 	save(pc, sp)
 	_g_.syscallsp = sp
 	_g_.syscallpc = pc
+	// 修改G状态为系统调用中
 	casgstatus(_g_, _Grunning, _Gsyscall)
 	if _g_.syscallsp < _g_.stack.lo || _g_.stack.hi < _g_.syscallsp {
 		systemstack(func() {
@@ -2967,10 +2971,13 @@ func reentersyscall(pc, sp uintptr) {
 	_g_.m.syscalltick = _g_.m.p.ptr().syscalltick
 	_g_.sysblocktraced = true
 	_g_.m.mcache = nil
+	// MP解绑
 	pp := _g_.m.p.ptr()
 	pp.m = 0
+	// 但是还是会把旧P的指针保留下（oldp), 用来当系统调用唤醒后优先绑定这个P
 	_g_.m.oldp.set(pp)
 	_g_.m.p = 0
+	// 修改P的状态为系统调用，以便于其他M绑定这个P来执行工作
 	atomic.Store(&pp.status, _Psyscall)
 	if sched.gcwaiting != 0 {
 		systemstack(entersyscall_gcwait)
@@ -3089,6 +3096,8 @@ func exitsyscall() {
 	}
 
 	_g_.waitsince = 0
+	// G和M不改变绑定关系，寻找空闲的P绑定
+	// GM不解绑的话相对高效一些, 所以优先尝试这种方式
 	oldp := _g_.m.oldp.ptr()
 	_g_.m.oldp = 0
 	if exitsyscallfast(oldp) {
@@ -3103,6 +3112,7 @@ func exitsyscall() {
 		// There's a cpu for us, so we can run.
 		_g_.m.p.ptr().syscalltick++
 		// We need to cas the status and scan before resuming...
+		// 绑定了P, 在恢复执行前修改G状态为执行中
 		casgstatus(_g_, _Gsyscall, _Grunning)
 
 		// Garbage collector isn't running (since we are),
@@ -3143,6 +3153,7 @@ func exitsyscall() {
 	_g_.m.locks--
 
 	// Call the scheduler.
+	// 解绑GM，尝试获取P
 	mcall(exitsyscall0)
 
 	if _g_.m.mcache == nil {
@@ -3170,14 +3181,18 @@ func exitsyscallfast(oldp *p) bool {
 	}
 
 	// Try to re-acquire the last P.
+	// 尝试去抢占之前M之前绑定的P（oldp)
+	// 如果之前的P处于空闲状态(_Psyscall)
 	if oldp != nil && oldp.status == _Psyscall && atomic.Cas(&oldp.status, _Psyscall, _Pidle) {
 		// There's a cpu for us, so we can run.
+		// 可以的话绑定这个P
 		wirep(oldp)
 		exitsyscallfast_reacquired()
 		return true
 	}
 
 	// Try to get any other idle P.
+	// 2. 获取全局其余空闲的P
 	if sched.pidle != 0 {
 		var ok bool
 		systemstack(func() {
@@ -3245,14 +3260,18 @@ func exitsyscallfast_pidle() bool {
 func exitsyscall0(gp *g) {
 	_g_ := getg()
 
+	// 将G的状态改为可运行（_Grunnable）
 	casgstatus(gp, _Gsyscall, _Grunnable)
+	// 解绑GM关系
 	dropg()
 	lock(&sched.lock)
 	var _p_ *p
 	if schedEnabled(_g_) {
+		// 还是优先去看有没有空闲的P来绑定
 		_p_ = pidleget()
 	}
 	if _p_ == nil {
+		// 还没没有空闲的P, 将G放进全局G队列
 		globrunqput(gp)
 	} else if atomic.Load(&sched.sysmonwait) != 0 {
 		atomic.Store(&sched.sysmonwait, 0)
@@ -3260,6 +3279,7 @@ func exitsyscall0(gp *g) {
 	}
 	unlock(&sched.lock)
 	if _p_ != nil {
+		// 找到空闲P绑定的话，执行G
 		acquirep(_p_)
 		execute(gp, false) // Never returns.
 	}
@@ -3268,6 +3288,8 @@ func exitsyscall0(gp *g) {
 		stoplockedm()
 		execute(gp, false) // Never returns.
 	}
+	// 没有P绑定的话，停止这个M->阻塞，
+	//直到有新的任务->唤醒
 	stopm()
 	schedule() // Never returns.
 }
