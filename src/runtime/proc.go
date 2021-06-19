@@ -3025,6 +3025,7 @@ func entersyscall_gcwait() {
 }
 
 // The same as entersyscall(), but with a hint that the syscall is blocking.
+// 当知道该系统调用会阻塞的话，调用entersyscallblock，直接释放掉P
 //go:nosplit
 func entersyscallblock() {
 	_g_ := getg()
@@ -3059,6 +3060,7 @@ func entersyscallblock() {
 		})
 	}
 
+	// entersyscallblock_handoff会执行释放P的操作
 	systemstack(entersyscallblock_handoff)
 
 	// Resave for traceback during blocked call.
